@@ -1560,14 +1560,25 @@ class Layer(BackendLayer, Operation):
         if isinstance(obj, backend.Variable):
             import gc
 
-            # It will take a short amount of time for the corresponding buffer
-            # to be actually removed from the device.
-            # https://stackoverflow.com/a/74631949
             self._untrack_variable(obj)
-            super().__delattr__(name)
+
+            # Backend-specific memory cleanup.
+            if backend.backend() == "torch":
+                import torch
+
+                from keras.src.backend.torch.core import get_device
+
+                torch_device = get_device()
+                if torch_device == "cuda":
+                    torch.cuda.empty_cache()
+                elif torch_device == "mps":
+                    torch.mps.empty_cache()
+                elif torch_device == "xpu":
+                    torch.xpu.empty_cache()
+
             gc.collect()
-        else:
-            super().__delattr__(name)
+
+        super().__delattr__(name)
 
     def _check_super_called(self):
         if getattr(self, "_lock", True):
