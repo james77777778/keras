@@ -1556,29 +1556,29 @@ class Layer(BackendLayer, Operation):
         super().__setattr__(name, value)
 
     def __delattr__(self, name):
+        import gc
+
         obj = getattr(self, name)
+        need_gc_collect = False
         if isinstance(obj, backend.Variable):
-            import gc
-
             self._untrack_variable(obj)
-
-            # Backend-specific memory cleanup.
-            if backend.backend() == "torch":
-                import torch
-
-                from keras.src.backend.torch.core import get_device
-
-                torch_device = get_device()
-                if torch_device == "cuda":
-                    torch.cuda.empty_cache()
-                elif torch_device == "mps":
-                    torch.mps.empty_cache()
-                elif torch_device == "xpu":
-                    torch.xpu.empty_cache()
-
-            gc.collect()
+            need_gc_collect = True
 
         super().__delattr__(name)
+
+        if need_gc_collect and backend.backend() == "torch":
+            import torch
+
+            from keras.src.backend.torch.core import get_device
+
+            gc.collect()
+            torch_device = get_device()
+            if torch_device == "cuda":
+                torch.cuda.empty_cache()
+            elif torch_device == "mps":
+                torch.mps.empty_cache()
+            elif torch_device == "xpu":
+                torch.xpu.empty_cache()
 
     def _check_super_called(self):
         if getattr(self, "_lock", True):
