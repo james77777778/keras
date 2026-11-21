@@ -11,8 +11,8 @@ from keras.src.backend.common.dtypes import promote_to_float_dtype
 from keras.src.backend.common.dtypes import result_type
 from keras.src.ops.operation import ElementwiseUnaryOperation
 from keras.src.ops.operation import Operation
+from keras.src.ops.operation import ReductionOperation
 from keras.src.ops.operation_utils import broadcast_shapes
-from keras.src.ops.operation_utils import reduce_shape
 
 
 def _segment_reduce_validation(data, segment_ids):
@@ -328,22 +328,9 @@ def in_top_k(targets, predictions, k):
     return backend.ops.math.in_top_k(targets, predictions, k)
 
 
-class Logsumexp(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        self.axis = axis
-        self.keepdims = keepdims
-
-    def compute_output_spec(self, x):
-        output_shape = reduce_shape(x.shape, self.axis, self.keepdims)
-        return KerasTensor(
-            shape=output_shape, dtype=promote_to_float_dtype(x.dtype)
-        )
-
-    def call(self, x):
-        return backend.ops.math.logsumexp(
-            x, axis=self.axis, keepdims=self.keepdims
-        )
+class Logsumexp(ReductionOperation):
+    call_fn = backend.ops.math.logsumexp
+    promote_to_float = True
 
 
 @keras_export("keras.ops.logsumexp")

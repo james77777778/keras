@@ -13,6 +13,7 @@ from keras.src.backend.common import in_symbolic_scope
 from keras.src.backend.common import remat
 from keras.src.backend.config import is_nnx_enabled
 from keras.src.ops.node import Node
+from keras.src.ops.operation_utils import reduce_shape
 from keras.src.saving.keras_saveable import KerasSaveable
 from keras.src.utils import python_utils
 from keras.src.utils import traceback_utils
@@ -514,3 +515,49 @@ class ElementwiseUnaryOperation(Operation):
         sparse = self.preserves_sparse and getattr(x, "sparse", False)
         ragged = getattr(x, "ragged", False)
         return KerasTensor(x.shape, dtype=dtype, sparse=sparse, ragged=ragged)
+
+
+class ReductionOperation(Operation):
+    """Base class for axis reduction operations.
+
+    Subclasses must specify `call_fn` as a class attribute.
+    Optionally, subclasses may specify `output_dtype` (e.g., `"bool"` for
+    predicates like `all`/`any` or `"int32"` for index reductions like
+    `argmax`/`argmin`), `promote_to_float = True` (for ops promoting
+    integer/bool inputs to floating-point, like `mean`/`std`/`var`), or
+    `preserves_sparse = True`. If neither `output_dtype` nor
+    `promote_to_float` is specified, the output dtype matches the input
+    tensor's dtype.
+    """
+
+    call_fn = None
+    output_dtype = None
+    preserves_sparse = False
+    promote_to_float = False
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if cls.call_fn is None:
+            raise ValueError(f"Class '{cls.__name__}' must define `call_fn`.")
+        cls.call_fn = staticmethod(cls.call_fn)
+
+    def __init__(self, axis=None, keepdims=False, *, name=None):
+        super().__init__(name=name)
+        self.axis = axis
+        self.keepdims = keepdims
+
+    def call(self, x):
+        return self.call_fn(x, axis=self.axis, keepdims=self.keepdims)
+
+    def compute_output_spec(self, x):
+        output_shape = reduce_shape(
+            x.shape, axis=self.axis, keepdims=self.keepdims
+        )
+        if self.output_dtype:
+            dtype = self.output_dtype
+        elif self.promote_to_float:
+            dtype = dtypes.promote_to_float_dtype(x.dtype)
+        else:
+            dtype = x.dtype
+        sparse = self.preserves_sparse and getattr(x, "sparse", False)
+        return KerasTensor(output_shape, dtype=dtype, sparse=sparse)

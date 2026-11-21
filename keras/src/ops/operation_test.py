@@ -515,3 +515,113 @@ class ElementwiseUnaryOperationTest(testing.TestCase):
                 sparse_2x2 = ops.one_hot([0, 1], 2, dtype=dt, sparse=True)
                 out = cls()(sparse_2x2)
                 self.assertSparse(out)
+
+
+class ReductionOperationTest(testing.TestCase):
+    def test_reduction_operation_basic(self):
+        class DummyMax(operation.ReductionOperation):
+            call_fn = backend.ops.numpy.max
+
+        op = DummyMax(axis=1)
+        x = np.array([[1.0, 3.0], [2.0, 4.0]], dtype="float32")
+        out = op(x)
+        self.assertAllClose(out, [3.0, 4.0])
+
+        sym_x = KerasTensor((2, 3), dtype="float32")
+        sym_out = op(sym_x)
+        self.assertEqual(sym_out.shape, (2,))
+        self.assertEqual(sym_out.dtype, "float32")
+        self.assertFalse(sym_out.sparse)
+
+        op_keepdims = DummyMax(axis=1, keepdims=True)
+        sym_out_keepdims = op_keepdims(sym_x)
+        self.assertEqual(sym_out_keepdims.shape, (2, 1))
+
+        op_all = DummyMax()
+        sym_out_all = op_all(sym_x)
+        self.assertEqual(sym_out_all.shape, ())
+
+    def test_reduction_operation_output_dtype(self):
+        class DummyAll(operation.ReductionOperation):
+            call_fn = backend.ops.numpy.all
+            output_dtype = "bool"
+
+        op = DummyAll(axis=0)
+        sym_x = KerasTensor((2, 3), dtype="float32")
+        sym_out = op(sym_x)
+        self.assertEqual(sym_out.shape, (3,))
+        self.assertEqual(sym_out.dtype, "bool")
+
+    def test_reduction_operation_promote_to_float(self):
+        class DummyMean(operation.ReductionOperation):
+            call_fn = backend.ops.numpy.mean
+            promote_to_float = True
+
+        op = DummyMean(axis=0)
+        sym_int = KerasTensor((2, 3), dtype="int32")
+        sym_out = op(sym_int)
+        self.assertEqual(sym_out.shape, (3,))
+        self.assertEqual(sym_out.dtype, config.floatx())
+
+        sym_bool = KerasTensor((2, 3), dtype="bool")
+        self.assertEqual(op(sym_bool).dtype, config.floatx())
+
+    def test_reduction_operation_sparse(self):
+        class DummySum(operation.ReductionOperation):
+            call_fn = backend.ops.numpy.sum
+            preserves_sparse = True
+
+        class DummyArgmax(operation.ReductionOperation):
+            call_fn = backend.ops.numpy.argmax
+            output_dtype = "int32"
+
+        sym_x = KerasTensor((2, 3), dtype="float32", sparse=True)
+        self.assertTrue(DummySum(axis=1)(sym_x).sparse)
+        self.assertFalse(DummyArgmax(axis=1)(sym_x).sparse)
+
+    def test_reduction_operation_missing_call_fn(self):
+        with self.assertRaisesRegex(ValueError, "must define `call_fn`"):
+
+            class MissingFnOp(operation.ReductionOperation):
+                pass
+
+    def test_subclasses_match_eager(self):
+        for cls in operation.ReductionOperation.__subclasses__():
+            if not cls.__module__.startswith(
+                "keras.src.ops."
+            ) or cls.__module__.endswith("_test"):
+                continue
+            for axis in (None, 0, -1):
+                for keepdims in (False, True):
+                    op = cls(axis=axis, keepdims=keepdims)
+                    for dt in ("float32", "int32"):
+                        out = op(ops.ones((2, 3), dtype=dt))
+                        sym = op(KerasTensor((2, 3), dtype=dt))
+                        self.assertEqual(
+                            tuple(sym.shape), tuple(out.shape), cls.__name__
+                        )
+                        self.assertEqual(
+                            sym.dtype,
+                            standardize_dtype(out.dtype),
+                            cls.__name__,
+                        )
+
+    @pytest.mark.skipif(
+        not backend.SUPPORTS_SPARSE_TENSORS,
+        reason="Backend does not support sparse tensors.",
+    )
+    def test_preserves_sparse_flags_match_backend(self):
+        sparse_2x2 = ops.one_hot([0, 1], 2, dtype="float32", sparse=True)
+        for cls in operation.ReductionOperation.__subclasses__():
+            if (
+                cls.preserves_sparse
+                and cls.__module__.startswith("keras.src.ops.")
+                and not cls.__module__.endswith("_test")
+            ):
+                if cls.__name__ == "Mean" and backend.backend() == "tensorflow":
+                    # TensorFlow `mean` supports `IndexedSlices`, not
+                    # `SparseTensor`.
+                    continue
+                for axis in (None, 0, 1):
+                    out = cls(axis=axis)(sparse_2x2)
+                    self.assertSparse(out)

@@ -21,6 +21,7 @@ from keras.src.backend.common.backend_utils import to_tuple_or_list
 from keras.src.ops import operation_utils
 from keras.src.ops.operation import ElementwiseUnaryOperation
 from keras.src.ops.operation import Operation
+from keras.src.ops.operation import ReductionOperation
 from keras.src.ops.operation_utils import broadcast_shapes
 from keras.src.ops.operation_utils import reduce_shape
 
@@ -33,6 +34,18 @@ def _compute_binary_output_spec(x1, x2):
         getattr(x2, "dtype", type(x2)),
     )
     return KerasTensor(broadcast_shapes(x1_shape, x2_shape), dtype=dtype)
+
+
+def _widen_int_reduction_dtype(dtype):
+    dtype = standardize_dtype(dtype)
+    if dtype in ("bool", "int8", "int16"):
+        dtype = "int32"
+    elif dtype in ("uint8", "uint16"):
+        dtype = "uint32"
+    # TODO: torch doesn't support uint32
+    if backend.backend() == "torch" and dtype == "uint32":
+        dtype = "int32"
+    return dtype
 
 
 class Rot90(Operation):
@@ -308,31 +321,9 @@ def add(x1, x2):
     return backend.ops.numpy.add(x1, x2)
 
 
-class All(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        if isinstance(axis, int):
-            self.axis = [axis]
-        else:
-            self.axis = axis
-        self.keepdims = keepdims
-
-    def call(self, x):
-        return backend.ops.numpy.all(
-            x,
-            axis=self.axis,
-            keepdims=self.keepdims,
-        )
-
-    def compute_output_spec(self, x):
-        return KerasTensor(
-            reduce_shape(
-                x.shape,
-                axis=self.axis,
-                keepdims=self.keepdims,
-            ),
-            dtype="bool",
-        )
+class All(ReductionOperation):
+    call_fn = backend.ops.numpy.all
+    output_dtype = "bool"
 
 
 @keras_export(["keras.ops.all", "keras.ops.numpy.all"])
@@ -489,31 +480,9 @@ def _angle(x):
     return backend.ops.numpy.arctan2(x_imag, x_real)
 
 
-class Any(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        if isinstance(axis, int):
-            self.axis = [axis]
-        else:
-            self.axis = axis
-        self.keepdims = keepdims
-
-    def call(self, x):
-        return backend.ops.numpy.any(
-            x,
-            axis=self.axis,
-            keepdims=self.keepdims,
-        )
-
-    def compute_output_spec(self, x):
-        return KerasTensor(
-            reduce_shape(
-                x.shape,
-                axis=self.axis,
-                keepdims=self.keepdims,
-            ),
-            dtype="bool",
-        )
+class Any(ReductionOperation):
+    call_fn = backend.ops.numpy.any
+    output_dtype = "bool"
 
 
 @keras_export(["keras.ops.any", "keras.ops.numpy.any"])
@@ -965,22 +934,9 @@ def arctanh(x):
     return backend.ops.numpy.arctanh(x)
 
 
-class Argmax(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        self.axis = axis
-        self.keepdims = keepdims
-
-    def call(self, x):
-        return backend.ops.numpy.argmax(
-            x, axis=self.axis, keepdims=self.keepdims
-        )
-
-    def compute_output_spec(self, x):
-        return KerasTensor(
-            reduce_shape(x.shape, axis=self.axis, keepdims=self.keepdims),
-            dtype="int32",
-        )
+class Argmax(ReductionOperation):
+    call_fn = backend.ops.numpy.argmax
+    output_dtype = "int32"
 
 
 @keras_export(["keras.ops.argmax", "keras.ops.numpy.argmax"])
@@ -1015,22 +971,9 @@ def argmax(x, axis=None, keepdims=False):
     return backend.ops.numpy.argmax(x, axis=axis, keepdims=keepdims)
 
 
-class Argmin(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        self.axis = axis
-        self.keepdims = keepdims
-
-    def call(self, x):
-        return backend.ops.numpy.argmin(
-            x, axis=self.axis, keepdims=self.keepdims
-        )
-
-    def compute_output_spec(self, x):
-        return KerasTensor(
-            reduce_shape(x.shape, axis=self.axis, keepdims=self.keepdims),
-            dtype="int32",
-        )
+class Argmin(ReductionOperation):
+    call_fn = backend.ops.numpy.argmin
+    output_dtype = "int32"
 
 
 @keras_export(["keras.ops.argmin", "keras.ops.numpy.argmin"])
@@ -5245,25 +5188,16 @@ def matmul(x1, x2):
     return backend.ops.numpy.matmul(x1, x2)
 
 
-class Max(Operation):
+class Max(ReductionOperation):
+    call_fn = backend.ops.numpy.max
+
     def __init__(self, axis=None, keepdims=False, initial=None, *, name=None):
-        super().__init__(name=name)
-        if isinstance(axis, int):
-            self.axis = [axis]
-        else:
-            self.axis = axis
-        self.keepdims = keepdims
+        super().__init__(axis=axis, keepdims=keepdims, name=name)
         self.initial = initial
 
     def call(self, x):
-        return backend.ops.numpy.max(
+        return self.call_fn(
             x, axis=self.axis, keepdims=self.keepdims, initial=self.initial
-        )
-
-    def compute_output_spec(self, x):
-        return KerasTensor(
-            reduce_shape(x.shape, axis=self.axis, keepdims=self.keepdims),
-            dtype=x.dtype,
         )
 
 
@@ -5411,25 +5345,9 @@ def _fmax(x1, x2):
     return backend.ops.numpy.where(backend.ops.numpy.isnan(x1), x2, res)
 
 
-class Median(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        if isinstance(axis, int):
-            axis = [axis]
-        self.axis = axis
-        self.keepdims = keepdims
-
-    def call(self, x):
-        return backend.ops.numpy.median(
-            x, axis=self.axis, keepdims=self.keepdims
-        )
-
-    def compute_output_spec(self, x):
-        output_shape = reduce_shape(
-            x.shape, axis=self.axis, keepdims=self.keepdims
-        )
-        dtype = dtypes.promote_to_float_dtype(x.dtype)
-        return KerasTensor(output_shape, dtype=dtype)
+class Median(ReductionOperation):
+    call_fn = backend.ops.numpy.median
+    promote_to_float = True
 
 
 @keras_export(["keras.ops.median", "keras.ops.numpy.median"])
@@ -5523,25 +5441,16 @@ def meshgrid(*x, indexing="xy"):
     return backend.ops.numpy.meshgrid(*x, indexing=indexing)
 
 
-class Min(Operation):
+class Min(ReductionOperation):
+    call_fn = backend.ops.numpy.min
+
     def __init__(self, axis=None, keepdims=False, initial=None, *, name=None):
-        super().__init__(name=name)
-        if isinstance(axis, int):
-            self.axis = [axis]
-        else:
-            self.axis = axis
-        self.keepdims = keepdims
+        super().__init__(axis=axis, keepdims=keepdims, name=name)
         self.initial = initial
 
     def call(self, x):
-        return backend.ops.numpy.min(
+        return self.call_fn(
             x, axis=self.axis, keepdims=self.keepdims, initial=self.initial
-        )
-
-    def compute_output_spec(self, x):
-        return KerasTensor(
-            reduce_shape(x.shape, axis=self.axis, keepdims=self.keepdims),
-            dtype=x.dtype,
         )
 
 
@@ -5860,21 +5769,31 @@ def moveaxis(x, source, destination):
     return backend.ops.numpy.moveaxis(x, source=source, destination=destination)
 
 
-class Nanargmax(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        self.axis = axis
-        self.keepdims = keepdims
+def _nanargmax(x, axis=None, keepdims=False):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "nanargmax"
+    ):
+        return backend.ops.numpy.nanargmax(x, axis=axis, keepdims=keepdims)
+    x = backend.ops.convert_to_tensor(x)
+    if not is_float_dtype(x.dtype):
+        return backend.ops.numpy.argmax(x, axis=axis, keepdims=keepdims)
+    nan_mask = backend.ops.numpy.isnan(x)
+    neg_inf = backend.ops.cast(float("-inf"), x.dtype)
+    result = backend.ops.numpy.argmax(
+        backend.ops.numpy.where(nan_mask, neg_inf, x),
+        axis=axis,
+        keepdims=keepdims,
+    )
+    return backend.ops.numpy.where(
+        backend.ops.numpy.all(nan_mask, axis=axis, keepdims=keepdims),
+        backend.ops.cast(-1, result.dtype),
+        result,
+    )
 
-    def call(self, x):
-        return _nanargmax(x, axis=self.axis, keepdims=self.keepdims)
 
-    def compute_output_spec(self, x):
-        axis = [self.axis] if self.axis is not None else None
-        return KerasTensor(
-            reduce_shape(x.shape, axis=axis, keepdims=self.keepdims),
-            dtype="int32",
-        )
+class Nanargmax(ReductionOperation):
+    call_fn = _nanargmax
+    output_dtype = "int32"
 
 
 @keras_export(["keras.ops.nanargmax", "keras.ops.numpy.nanargmax"])
@@ -5917,18 +5836,18 @@ def nanargmax(x, axis=None, keepdims=False):
     return _nanargmax(x, axis=axis, keepdims=keepdims)
 
 
-def _nanargmax(x, axis=None, keepdims=False):
+def _nanargmin(x, axis=None, keepdims=False):
     if not config._use_backend_agnostic_ops() and hasattr(
-        backend.ops.numpy, "nanargmax"
+        backend.ops.numpy, "nanargmin"
     ):
-        return backend.ops.numpy.nanargmax(x, axis=axis, keepdims=keepdims)
+        return backend.ops.numpy.nanargmin(x, axis=axis, keepdims=keepdims)
     x = backend.ops.convert_to_tensor(x)
     if not is_float_dtype(x.dtype):
-        return backend.ops.numpy.argmax(x, axis=axis, keepdims=keepdims)
+        return backend.ops.numpy.argmin(x, axis=axis, keepdims=keepdims)
     nan_mask = backend.ops.numpy.isnan(x)
-    neg_inf = backend.ops.cast(float("-inf"), x.dtype)
-    result = backend.ops.numpy.argmax(
-        backend.ops.numpy.where(nan_mask, neg_inf, x),
+    pos_inf = backend.ops.cast(float("inf"), x.dtype)
+    result = backend.ops.numpy.argmin(
+        backend.ops.numpy.where(nan_mask, pos_inf, x),
         axis=axis,
         keepdims=keepdims,
     )
@@ -5939,21 +5858,9 @@ def _nanargmax(x, axis=None, keepdims=False):
     )
 
 
-class Nanargmin(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        self.axis = axis
-        self.keepdims = keepdims
-
-    def call(self, x):
-        return _nanargmin(x, axis=self.axis, keepdims=self.keepdims)
-
-    def compute_output_spec(self, x):
-        axis = [self.axis] if self.axis is not None else None
-        return KerasTensor(
-            reduce_shape(x.shape, axis=axis, keepdims=self.keepdims),
-            dtype="int32",
-        )
+class Nanargmin(ReductionOperation):
+    call_fn = _nanargmin
+    output_dtype = "int32"
 
 
 @keras_export(["keras.ops.nanargmin", "keras.ops.numpy.nanargmin"])
@@ -5994,28 +5901,6 @@ def nanargmin(x, axis=None, keepdims=False):
     if any_symbolic_tensors((x,)):
         return Nanargmin(axis=axis, keepdims=keepdims).symbolic_call(x)
     return _nanargmin(x, axis=axis, keepdims=keepdims)
-
-
-def _nanargmin(x, axis=None, keepdims=False):
-    if not config._use_backend_agnostic_ops() and hasattr(
-        backend.ops.numpy, "nanargmin"
-    ):
-        return backend.ops.numpy.nanargmin(x, axis=axis, keepdims=keepdims)
-    x = backend.ops.convert_to_tensor(x)
-    if not is_float_dtype(x.dtype):
-        return backend.ops.numpy.argmin(x, axis=axis, keepdims=keepdims)
-    nan_mask = backend.ops.numpy.isnan(x)
-    pos_inf = backend.ops.cast(float("inf"), x.dtype)
-    result = backend.ops.numpy.argmin(
-        backend.ops.numpy.where(nan_mask, pos_inf, x),
-        axis=axis,
-        keepdims=keepdims,
-    )
-    return backend.ops.numpy.where(
-        backend.ops.numpy.all(nan_mask, axis=axis, keepdims=keepdims),
-        backend.ops.cast(-1, result.dtype),
-        result,
-    )
 
 
 class Nancumsum(Operation):
@@ -6162,25 +6047,31 @@ def _nancumprod(x, axis=None, dtype=None):
     return backend.ops.numpy.cumprod(x, axis=axis, dtype=dtype)
 
 
-class Nanmax(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        self.axis = axis
-        self.keepdims = keepdims
+def _nanmax(x, axis=None, keepdims=False):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "nanmax"
+    ):
+        return backend.ops.numpy.nanmax(x, axis=axis, keepdims=keepdims)
+    x = backend.ops.convert_to_tensor(x)
+    if not is_float_dtype(x.dtype):
+        return backend.ops.numpy.max(x, axis=axis, keepdims=keepdims)
+    nan_mask = backend.ops.numpy.isnan(x)
+    neg_inf = backend.ops.cast(float("-inf"), x.dtype)
+    nan = backend.ops.cast(float("nan"), x.dtype)
+    result = backend.ops.numpy.max(
+        backend.ops.numpy.where(nan_mask, neg_inf, x),
+        axis=axis,
+        keepdims=keepdims,
+    )
+    return backend.ops.numpy.where(
+        backend.ops.numpy.all(nan_mask, axis=axis, keepdims=keepdims),
+        nan,
+        result,
+    )
 
-    def call(self, x):
-        return _nanmax(x, axis=self.axis, keepdims=self.keepdims)
 
-    def compute_output_spec(self, x):
-        dtype = dtypes.result_type(getattr(x, "dtype", config.floatx()))
-
-        if backend.backend() == "torch" and dtype == "uint32":
-            dtype = "int32"
-
-        return KerasTensor(
-            reduce_shape(x.shape, axis=self.axis, keepdims=self.keepdims),
-            dtype=dtype,
-        )
+class Nanmax(ReductionOperation):
+    call_fn = _nanmax
 
 
 @keras_export(["keras.ops.nanmax", "keras.ops.numpy.nanmax"])
@@ -6219,44 +6110,30 @@ def nanmax(x, axis=None, keepdims=False):
     return _nanmax(x, axis=axis, keepdims=keepdims)
 
 
-def _nanmax(x, axis=None, keepdims=False):
+def _nanmean(x, axis=None, keepdims=False):
     if not config._use_backend_agnostic_ops() and hasattr(
-        backend.ops.numpy, "nanmax"
+        backend.ops.numpy, "nanmean"
     ):
-        return backend.ops.numpy.nanmax(x, axis=axis, keepdims=keepdims)
+        return backend.ops.numpy.nanmean(x, axis=axis, keepdims=keepdims)
     x = backend.ops.convert_to_tensor(x)
-    if not is_float_dtype(x.dtype):
-        return backend.ops.numpy.max(x, axis=axis, keepdims=keepdims)
-    nan_mask = backend.ops.numpy.isnan(x)
-    neg_inf = backend.ops.cast(float("-inf"), x.dtype)
-    nan = backend.ops.cast(float("nan"), x.dtype)
-    result = backend.ops.numpy.max(
-        backend.ops.numpy.where(nan_mask, neg_inf, x),
+    dtype = dtypes.promote_to_float_dtype(x.dtype)
+    x = backend.ops.cast(x, dtype)
+    if axis == () or axis == []:
+        return x
+    total = _nansum(x, axis=axis, keepdims=keepdims)
+    count = backend.ops.numpy.sum(
+        backend.ops.cast(
+            backend.ops.numpy.logical_not(backend.ops.numpy.isnan(x)), dtype
+        ),
         axis=axis,
         keepdims=keepdims,
     )
-    return backend.ops.numpy.where(
-        backend.ops.numpy.all(nan_mask, axis=axis, keepdims=keepdims),
-        nan,
-        result,
-    )
+    return backend.ops.numpy.divide(total, count)
 
 
-class Nanmean(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        self.axis = axis
-        self.keepdims = keepdims
-
-    def call(self, x):
-        return _nanmean(x, axis=self.axis, keepdims=self.keepdims)
-
-    def compute_output_spec(self, x):
-        dtype = dtypes.promote_to_float_dtype(x.dtype)
-        return KerasTensor(
-            reduce_shape(x.shape, axis=self.axis, keepdims=self.keepdims),
-            dtype=dtype,
-        )
+class Nanmean(ReductionOperation):
+    call_fn = _nanmean
+    promote_to_float = True
 
 
 @keras_export(["keras.ops.nanmean", "keras.ops.numpy.nanmean"])
@@ -6295,42 +6172,20 @@ def nanmean(x, axis=None, keepdims=False):
     return _nanmean(x, axis=axis, keepdims=keepdims)
 
 
-def _nanmean(x, axis=None, keepdims=False):
+def _nanmedian(x, axis=None, keepdims=False):
     if not config._use_backend_agnostic_ops() and hasattr(
-        backend.ops.numpy, "nanmean"
+        backend.ops.numpy, "nanmedian"
     ):
-        return backend.ops.numpy.nanmean(x, axis=axis, keepdims=keepdims)
+        return backend.ops.numpy.nanmedian(x, axis=axis, keepdims=keepdims)
     x = backend.ops.convert_to_tensor(x)
-    dtype = dtypes.promote_to_float_dtype(x.dtype)
-    x = backend.ops.cast(x, dtype)
     if axis == () or axis == []:
-        return x
-    total = _nansum(x, axis=axis, keepdims=keepdims)
-    count = backend.ops.numpy.sum(
-        backend.ops.cast(
-            backend.ops.numpy.logical_not(backend.ops.numpy.isnan(x)), dtype
-        ),
-        axis=axis,
-        keepdims=keepdims,
-    )
-    return backend.ops.numpy.divide(total, count)
+        return backend.ops.cast(x, dtypes.promote_to_float_dtype(x.dtype))
+    return _nanquantile(x, 0.5, axis=axis, keepdims=keepdims)
 
 
-class Nanmedian(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        self.axis = axis
-        self.keepdims = keepdims
-
-    def call(self, x):
-        return _nanmedian(x, axis=self.axis, keepdims=self.keepdims)
-
-    def compute_output_spec(self, x):
-        dtype = dtypes.promote_to_float_dtype(x.dtype)
-        return KerasTensor(
-            reduce_shape(x.shape, axis=self.axis, keepdims=self.keepdims),
-            dtype=dtype,
-        )
+class Nanmedian(ReductionOperation):
+    call_fn = _nanmedian
+    promote_to_float = True
 
 
 @keras_export(["keras.ops.nanmedian", "keras.ops.numpy.nanmedian"])
@@ -6372,36 +6227,31 @@ def nanmedian(x, axis=None, keepdims=False):
     return _nanmedian(x, axis=axis, keepdims=keepdims)
 
 
-def _nanmedian(x, axis=None, keepdims=False):
+def _nanmin(x, axis=None, keepdims=False):
     if not config._use_backend_agnostic_ops() and hasattr(
-        backend.ops.numpy, "nanmedian"
+        backend.ops.numpy, "nanmin"
     ):
-        return backend.ops.numpy.nanmedian(x, axis=axis, keepdims=keepdims)
+        return backend.ops.numpy.nanmin(x, axis=axis, keepdims=keepdims)
     x = backend.ops.convert_to_tensor(x)
-    if axis == () or axis == []:
-        return backend.ops.cast(x, dtypes.promote_to_float_dtype(x.dtype))
-    return _nanquantile(x, 0.5, axis=axis, keepdims=keepdims)
+    if not is_float_dtype(x.dtype):
+        return backend.ops.numpy.min(x, axis=axis, keepdims=keepdims)
+    nan_mask = backend.ops.numpy.isnan(x)
+    pos_inf = backend.ops.cast(float("inf"), x.dtype)
+    nan = backend.ops.cast(float("nan"), x.dtype)
+    result = backend.ops.numpy.min(
+        backend.ops.numpy.where(nan_mask, pos_inf, x),
+        axis=axis,
+        keepdims=keepdims,
+    )
+    return backend.ops.numpy.where(
+        backend.ops.numpy.all(nan_mask, axis=axis, keepdims=keepdims),
+        nan,
+        result,
+    )
 
 
-class Nanmin(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        self.axis = axis
-        self.keepdims = keepdims
-
-    def call(self, x):
-        return _nanmin(x, axis=self.axis, keepdims=self.keepdims)
-
-    def compute_output_spec(self, x):
-        dtype = dtypes.result_type(getattr(x, "dtype", config.floatx()))
-
-        if backend.backend() == "torch" and dtype == "uint32":
-            dtype = "int32"
-
-        return KerasTensor(
-            reduce_shape(x.shape, axis=self.axis, keepdims=self.keepdims),
-            dtype=dtype,
-        )
+class Nanmin(ReductionOperation):
+    call_fn = _nanmin
 
 
 @keras_export(["keras.ops.nanmin", "keras.ops.numpy.nanmin"])
@@ -6437,29 +6287,6 @@ def nanmin(x, axis=None, keepdims=False):
     if any_symbolic_tensors((x,)):
         return Nanmin(axis=axis, keepdims=keepdims).symbolic_call(x)
     return _nanmin(x, axis=axis, keepdims=keepdims)
-
-
-def _nanmin(x, axis=None, keepdims=False):
-    if not config._use_backend_agnostic_ops() and hasattr(
-        backend.ops.numpy, "nanmin"
-    ):
-        return backend.ops.numpy.nanmin(x, axis=axis, keepdims=keepdims)
-    x = backend.ops.convert_to_tensor(x)
-    if not is_float_dtype(x.dtype):
-        return backend.ops.numpy.min(x, axis=axis, keepdims=keepdims)
-    nan_mask = backend.ops.numpy.isnan(x)
-    pos_inf = backend.ops.cast(float("inf"), x.dtype)
-    nan = backend.ops.cast(float("nan"), x.dtype)
-    result = backend.ops.numpy.min(
-        backend.ops.numpy.where(nan_mask, pos_inf, x),
-        axis=axis,
-        keepdims=keepdims,
-    )
-    return backend.ops.numpy.where(
-        backend.ops.numpy.all(nan_mask, axis=axis, keepdims=keepdims),
-        nan,
-        result,
-    )
 
 
 class Nanpercentile(Operation):
@@ -6560,31 +6387,26 @@ def _nanpercentile(x, q, axis=None, method="linear", keepdims=False):
     return _nanquantile(x, q, axis=axis, method=method, keepdims=keepdims)
 
 
-class Nanprod(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        self.axis = axis
-        self.keepdims = keepdims
+def _nanprod(x, axis=None, keepdims=False):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "nanprod"
+    ):
+        return backend.ops.numpy.nanprod(x, axis=axis, keepdims=keepdims)
+    x = backend.ops.convert_to_tensor(x)
+    if is_float_dtype(x.dtype):
+        x = backend.ops.numpy.where(
+            backend.ops.numpy.isnan(x), backend.ops.cast(1, x.dtype), x
+        )
+    return backend.ops.numpy.prod(x, axis=axis, keepdims=keepdims)
 
-    def call(self, x):
-        return _nanprod(x, axis=self.axis, keepdims=self.keepdims)
+
+class Nanprod(ReductionOperation):
+    call_fn = _nanprod
 
     def compute_output_spec(self, x):
-        dtype = standardize_dtype(x.dtype)
-
-        if dtype == "bool":
-            dtype = "int32"
-        elif dtype in ("int8", "int16"):
-            dtype = "int32"
-        elif dtype in ("uint8", "uint16"):
-            dtype = "uint32"
-
-        if backend.backend() == "torch" and dtype == "uint32":
-            dtype = "int32"
-
         return KerasTensor(
             reduce_shape(x.shape, axis=self.axis, keepdims=self.keepdims),
-            dtype=dtype,
+            dtype=_widen_int_reduction_dtype(x.dtype),
         )
 
 
@@ -6620,19 +6442,6 @@ def nanprod(x, axis=None, keepdims=False):
     if any_symbolic_tensors((x,)):
         return Nanprod(axis=axis, keepdims=keepdims).symbolic_call(x)
     return _nanprod(x, axis=axis, keepdims=keepdims)
-
-
-def _nanprod(x, axis=None, keepdims=False):
-    if not config._use_backend_agnostic_ops() and hasattr(
-        backend.ops.numpy, "nanprod"
-    ):
-        return backend.ops.numpy.nanprod(x, axis=axis, keepdims=keepdims)
-    x = backend.ops.convert_to_tensor(x)
-    if is_float_dtype(x.dtype):
-        x = backend.ops.numpy.where(
-            backend.ops.numpy.isnan(x), backend.ops.cast(1, x.dtype), x
-        )
-    return backend.ops.numpy.prod(x, axis=axis, keepdims=keepdims)
 
 
 class Nanquantile(Operation):
@@ -6807,21 +6616,17 @@ def _nanquantile(x, q, axis=None, method="linear", keepdims=False):
     return backend.ops.numpy.reshape(result, output_shape)
 
 
-class Nanstd(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        self.axis = axis
-        self.keepdims = keepdims
+def _nanstd(x, axis=None, keepdims=False):
+    if not config._use_backend_agnostic_ops() and hasattr(
+        backend.ops.numpy, "nanstd"
+    ):
+        return backend.ops.numpy.nanstd(x, axis=axis, keepdims=keepdims)
+    return backend.ops.numpy.sqrt(_nanvar(x, axis=axis, keepdims=keepdims))
 
-    def call(self, x):
-        return _nanstd(x, axis=self.axis, keepdims=self.keepdims)
 
-    def compute_output_spec(self, x):
-        output_dtype = dtypes.promote_to_float_dtype(x.dtype)
-        return KerasTensor(
-            reduce_shape(x.shape, axis=self.axis, keepdims=self.keepdims),
-            dtype=output_dtype,
-        )
+class Nanstd(ReductionOperation):
+    call_fn = _nanstd
+    promote_to_float = True
 
 
 @keras_export(["keras.ops.nanstd", "keras.ops.numpy.nanstd"])
@@ -6859,38 +6664,24 @@ def nanstd(x, axis=None, keepdims=False):
     return _nanstd(x, axis=axis, keepdims=keepdims)
 
 
-def _nanstd(x, axis=None, keepdims=False):
+def _nansum(x, axis=None, keepdims=False):
     if not config._use_backend_agnostic_ops() and hasattr(
-        backend.ops.numpy, "nanstd"
+        backend.ops.numpy, "nansum"
     ):
-        return backend.ops.numpy.nanstd(x, axis=axis, keepdims=keepdims)
-    return backend.ops.numpy.sqrt(_nanvar(x, axis=axis, keepdims=keepdims))
+        return backend.ops.numpy.nansum(x, axis=axis, keepdims=keepdims)
+    x = backend.ops.convert_to_tensor(x)
+    if is_float_dtype(x.dtype):
+        x = backend.ops.numpy.where(backend.ops.numpy.isnan(x), 0, x)
+    return backend.ops.numpy.sum(x, axis=axis, keepdims=keepdims)
 
 
-class Nansum(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        self.axis = axis
-        self.keepdims = keepdims
-
-    def call(self, x):
-        return _nansum(x, axis=self.axis, keepdims=self.keepdims)
+class Nansum(ReductionOperation):
+    call_fn = _nansum
 
     def compute_output_spec(self, x):
-        dtype = dtypes.result_type(getattr(x, "dtype", config.floatx()))
-
-        if dtype in ("bool", "int8", "int16"):
-            dtype = "int32"
-        elif dtype in ("uint8", "uint16"):
-            dtype = "uint32"
-
-        if backend.backend() == "torch" and dtype == "uint32":
-            dtype = "int32"
-        sparse = getattr(x, "sparse", False)
         return KerasTensor(
             reduce_shape(x.shape, axis=self.axis, keepdims=self.keepdims),
-            dtype=dtype,
-            sparse=sparse,
+            dtype=_widen_int_reduction_dtype(x.dtype),
         )
 
 
@@ -6928,32 +6719,35 @@ def nansum(x, axis=None, keepdims=False):
     return _nansum(x, axis=axis, keepdims=keepdims)
 
 
-def _nansum(x, axis=None, keepdims=False):
+def _nanvar(x, axis=None, keepdims=False):
     if not config._use_backend_agnostic_ops() and hasattr(
-        backend.ops.numpy, "nansum"
+        backend.ops.numpy, "nanvar"
     ):
-        return backend.ops.numpy.nansum(x, axis=axis, keepdims=keepdims)
+        return backend.ops.numpy.nanvar(x, axis=axis, keepdims=keepdims)
     x = backend.ops.convert_to_tensor(x)
-    if is_float_dtype(x.dtype):
-        x = backend.ops.numpy.where(backend.ops.numpy.isnan(x), 0, x)
-    return backend.ops.numpy.sum(x, axis=axis, keepdims=keepdims)
+    dtype = dtypes.promote_to_float_dtype(x.dtype)
+    x = backend.ops.cast(x, dtype)
+    nan_mask = backend.ops.numpy.isnan(x)
+    mean = _nanmean(x, axis=axis, keepdims=True)
+    centered = backend.ops.numpy.where(
+        nan_mask,
+        backend.ops.cast(0, dtype),
+        backend.ops.numpy.subtract(x, mean),
+    )
+    sum_sq = backend.ops.numpy.sum(
+        backend.ops.numpy.square(centered), axis=axis, keepdims=keepdims
+    )
+    count = backend.ops.numpy.sum(
+        backend.ops.cast(backend.ops.numpy.logical_not(nan_mask), dtype),
+        axis=axis,
+        keepdims=keepdims,
+    )
+    return backend.ops.numpy.divide(sum_sq, count)
 
 
-class Nanvar(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        self.axis = axis
-        self.keepdims = keepdims
-
-    def call(self, x):
-        return _nanvar(x, axis=self.axis, keepdims=self.keepdims)
-
-    def compute_output_spec(self, x):
-        output_dtype = dtypes.promote_to_float_dtype(x.dtype)
-        return KerasTensor(
-            reduce_shape(x.shape, axis=self.axis, keepdims=self.keepdims),
-            dtype=output_dtype,
-        )
+class Nanvar(ReductionOperation):
+    call_fn = _nanvar
+    promote_to_float = True
 
 
 @keras_export(["keras.ops.nanvar", "keras.ops.numpy.nanvar"])
@@ -6989,32 +6783,6 @@ def nanvar(x, axis=None, keepdims=False):
     if any_symbolic_tensors((x,)):
         return Nanvar(axis=axis, keepdims=keepdims).symbolic_call(x)
     return _nanvar(x, axis=axis, keepdims=keepdims)
-
-
-def _nanvar(x, axis=None, keepdims=False):
-    if not config._use_backend_agnostic_ops() and hasattr(
-        backend.ops.numpy, "nanvar"
-    ):
-        return backend.ops.numpy.nanvar(x, axis=axis, keepdims=keepdims)
-    x = backend.ops.convert_to_tensor(x)
-    dtype = dtypes.promote_to_float_dtype(x.dtype)
-    x = backend.ops.cast(x, dtype)
-    nan_mask = backend.ops.numpy.isnan(x)
-    mean = _nanmean(x, axis=axis, keepdims=True)
-    centered = backend.ops.numpy.where(
-        nan_mask,
-        backend.ops.cast(0, dtype),
-        backend.ops.numpy.subtract(x, mean),
-    )
-    sum_sq = backend.ops.numpy.sum(
-        backend.ops.numpy.square(centered), axis=axis, keepdims=keepdims
-    )
-    count = backend.ops.numpy.sum(
-        backend.ops.cast(backend.ops.numpy.logical_not(nan_mask), dtype),
-        axis=axis,
-        keepdims=keepdims,
-    )
-    return backend.ops.numpy.divide(sum_sq, count)
 
 
 class NanToNum(ElementwiseUnaryOperation):
@@ -7421,18 +7189,15 @@ def percentile(x, q, axis=None, method="linear", keepdims=False):
     )
 
 
-class Prod(Operation):
+class Prod(ReductionOperation):
+    call_fn = backend.ops.numpy.prod
+
     def __init__(self, axis=None, keepdims=False, dtype=None, *, name=None):
-        super().__init__(name=name)
-        if isinstance(axis, int):
-            self.axis = [axis]
-        else:
-            self.axis = axis
-        self.keepdims = keepdims
+        super().__init__(axis=axis, keepdims=keepdims, name=name)
         self.dtype = dtype
 
     def call(self, x):
-        return backend.ops.numpy.prod(
+        return self.call_fn(
             x,
             axis=self.axis,
             keepdims=self.keepdims,
@@ -7442,17 +7207,10 @@ class Prod(Operation):
     def compute_output_spec(self, x):
         if self.dtype is not None:
             dtype = self.dtype
+            if backend.backend() == "torch" and dtype == "uint32":
+                dtype = "int32"
         else:
-            dtype = standardize_dtype(x.dtype)
-            if dtype == "bool":
-                dtype = "int32"
-            elif dtype in ("int8", "int16"):
-                dtype = "int32"
-            elif dtype in ("uint8", "uint16"):
-                dtype = "uint32"
-        # TODO: torch doesn't support uint32
-        if backend.backend() == "torch" and dtype == "uint32":
-            dtype = "int32"
+            dtype = _widen_int_reduction_dtype(x.dtype)
         return KerasTensor(
             reduce_shape(x.shape, axis=self.axis, keepdims=self.keepdims),
             dtype=dtype,
@@ -7481,25 +7239,8 @@ def prod(x, axis=None, keepdims=False, dtype=None):
     return backend.ops.numpy.prod(x, axis=axis, keepdims=keepdims, dtype=dtype)
 
 
-class Ptp(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        self.axis = axis
-        self.keepdims = keepdims
-
-    def call(self, x):
-        return backend.ops.numpy.ptp(
-            x,
-            axis=self.axis,
-            keepdims=self.keepdims,
-        )
-
-    def compute_output_spec(self, x):
-        dtype = standardize_dtype(x.dtype)
-        return KerasTensor(
-            reduce_shape(x.shape, axis=self.axis, keepdims=self.keepdims),
-            dtype=dtype,
-        )
+class Ptp(ReductionOperation):
+    call_fn = backend.ops.numpy.ptp
 
 
 @keras_export(["keras.ops.ptp", "keras.ops.numpy.ptp"])
@@ -8296,28 +8037,17 @@ def stack(x, axis=0):
     return backend.ops.numpy.stack(x, axis=axis)
 
 
-class Std(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        if isinstance(axis, int):
-            self.axis = [axis]
-        else:
-            self.axis = axis
-        self.keepdims = keepdims
-
-    def call(self, x):
-        return backend.ops.numpy.std(x, axis=self.axis, keepdims=self.keepdims)
+class Std(ReductionOperation):
+    call_fn = backend.ops.numpy.std
+    promote_to_float = True
 
     def compute_output_spec(self, x):
-        output_dtype = dtypes.promote_to_float_dtype(x.dtype)
-        if output_dtype == "complex64":
-            output_dtype = "float32"
-        elif output_dtype == "complex128":
-            output_dtype = "float64"
-        return KerasTensor(
-            reduce_shape(x.shape, axis=self.axis, keepdims=self.keepdims),
-            dtype=output_dtype,
-        )
+        spec = super().compute_output_spec(x)
+        if spec.dtype == "complex64":
+            return KerasTensor(spec.shape, dtype="float32")
+        elif spec.dtype == "complex128":
+            return KerasTensor(spec.shape, dtype="float64")
+        return spec
 
 
 @keras_export(["keras.ops.std", "keras.ops.numpy.std"])
@@ -9623,25 +9353,10 @@ def trapezoid(y, x=None, dx=1.0, axis=-1):
     return backend.ops.numpy.trapezoid(y, x=x, dx=dx, axis=axis)
 
 
-class Mean(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        if isinstance(axis, int):
-            axis = [axis]
-        self.axis = axis
-        self.keepdims = keepdims
-
-    def call(self, x):
-        return backend.ops.numpy.mean(x, axis=self.axis, keepdims=self.keepdims)
-
-    def compute_output_spec(self, x):
-        result_dtype = dtypes.promote_to_float_dtype(x.dtype)
-        sparse = getattr(x, "sparse", False)
-        return KerasTensor(
-            reduce_shape(x.shape, axis=self.axis, keepdims=self.keepdims),
-            dtype=result_dtype,
-            sparse=sparse,
-        )
+class Mean(ReductionOperation):
+    call_fn = backend.ops.numpy.mean
+    promote_to_float = True
+    preserves_sparse = True
 
 
 @keras_export(["keras.ops.mean", "keras.ops.numpy.mean"])
@@ -9734,23 +9449,9 @@ def vander(x, N=None, increasing=False):
     return backend.ops.numpy.vander(x, N=N, increasing=increasing)
 
 
-class Var(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        if isinstance(axis, int):
-            axis = [axis]
-        self.axis = axis
-        self.keepdims = keepdims
-
-    def call(self, x):
-        return backend.ops.numpy.var(x, axis=self.axis, keepdims=self.keepdims)
-
-    def compute_output_spec(self, x):
-        output_dtype = dtypes.promote_to_float_dtype(x.dtype)
-        return KerasTensor(
-            reduce_shape(x.shape, axis=self.axis, keepdims=self.keepdims),
-            dtype=output_dtype,
-        )
+class Var(ReductionOperation):
+    call_fn = backend.ops.numpy.var
+    promote_to_float = True
 
 
 @keras_export(["keras.ops.var", "keras.ops.numpy.var"])
@@ -9772,27 +9473,12 @@ def var(x, axis=None, keepdims=False):
     return backend.ops.numpy.var(x, axis=axis, keepdims=keepdims)
 
 
-class Sum(Operation):
-    def __init__(self, axis=None, keepdims=False, *, name=None):
-        super().__init__(name=name)
-        if isinstance(axis, int):
-            axis = [axis]
-        self.axis = axis
-        self.keepdims = keepdims
-
-    def call(self, x):
-        return backend.ops.numpy.sum(x, axis=self.axis, keepdims=self.keepdims)
+class Sum(ReductionOperation):
+    call_fn = backend.ops.numpy.sum
+    preserves_sparse = True
 
     def compute_output_spec(self, x):
-        dtype = dtypes.result_type(getattr(x, "dtype", config.floatx()))
-        # follow jax's rule
-        if dtype in ("bool", "int8", "int16"):
-            dtype = "int32"
-        elif dtype in ("uint8", "uint16"):
-            dtype = "uint32"
-        # TODO: torch doesn't support uint32
-        if backend.backend() == "torch" and dtype == "uint32":
-            dtype = "int32"
+        dtype = _widen_int_reduction_dtype(getattr(x, "dtype", config.floatx()))
         sparse = getattr(x, "sparse", False)
         return KerasTensor(
             reduce_shape(x.shape, axis=self.axis, keepdims=self.keepdims),
